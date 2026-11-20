@@ -229,5 +229,110 @@ async def audio_extract(url: str) -> dict:
             "error": "Audio download failed or exceeded limits",
         }
 
+from shazamio import Shazam
+
+
+def _download_for_shazam(url: str, folder: str) -> str:
+    from pathlib import Path
+    from time import monotonic
+
+    limit = 25 * 1024 * 1024
+    deadline = monotonic() + 55
+
+    def progress(data):
+        if monotonic() > deadline:
+            raise RuntimeError("Download timeout")
+
+        if data.get("status") == "downloading":
+            received = data.get("downloaded_bytes") or 0
+            total = (
+                data.get("total_bytes")
+                or data.get("total_bytes_estimate")
+                or 0
+            )
+            if max(received, total) > limit:
+                raise RuntimeError("File too large")
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "format": "bestaudio[ext=m4a]/bestaudio/best[acodec!=none]",
+        "outtmpl": str(Path(folder) / "music.%(ext)s"),
+        "socket_timeout": 12,
+        "retries": 1,
+        "fragment_retries": 1,
+        "max_filesize": limit,
+        "progress_hooks": [progress],
+    }
+
+    with YoutubeDL(options) as ydl:
+        ydl.extract_info(url, download=True)
+
+    files = [p for p in Path(folder).iterdir() if p.is_file()]
+    if len(files) != 1:
+        raise RuntimeError("Audio file not found")
+
+    audio = files[0]
+    if not 0 < audio.stat().st_size <= limit:
+        raise RuntimeError("Invalid audio size")
+
+    return str(audio)
+
+
+@mcp.tool()
+async def identify_music(url: str) -> dict:
+    """Recognize music in an Instagram or TikTok video."""
+    import tempfile
+
+    try:
+        clean_url = _validate_url(url)
+    except (ValueError, TypeError) as exc:
+        return {
+            "status": "invalid_url",
+            "error": str(exc),
+        }
+
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            audio_path = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _download_for_shazam,
+                    clean_url,
+                    folder,
+                ),
+                timeout=65,
+            )
+
+            async with Shazam() as shazam:
+                result = await asyncio.wait_for(
+                    shazam.recognize(audio_path),
+                    timeout=35,
+                )
+
+        track = result.get("track") if isinstance(result, dict) else None
+
+        if not track:
+            return {
+                "status": "not_recognized",
+                "message": "Shazam did not identify a song",
+            }
+
+        return {
+            "status": "ok",
+            "title": track.get("title"),
+            "artist": track.get("subtitle"),
+            "shazam_url": track.get("url"),
+            "track_id": track.get("key"),
+            "note": "One audio segment analyzed",
+        }
+
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "message": "Download or recognition failed",
+        }
+
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
