@@ -12,9 +12,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import imageio_ffmpeg
 from fastmcp import FastMCP
+print("DIAGNOSTIC: importing Shazamio", flush=True)
 from shazamio import Shazam
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
+print("DIAGNOSTIC: imports completed", flush=True)
 
 mcp = FastMCP("VideoAnalyzer")
 
@@ -361,4 +363,5 @@ async def identify_all_music(
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
+    print(f"DIAGNOSTIC: starting MCP on port {port}", flush=True)
     mcp.run(transport="http", host="0.0.0.0", port=port)
