@@ -360,7 +360,7 @@ async def identify_music(url: str) -> dict:
             "error_type": type(exc).__name__,
             "error_details": str(exc)[:1000],
             "message": "Audio processing or recognition failed",
-    
+    }
     
 @mcp.tool()
 async def identify_all_music(
