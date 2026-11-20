@@ -361,7 +361,197 @@ async def identify_music(url: str) -> dict:
             "error_details": str(exc)[:1000],
             "message": "Audio processing or recognition failed",
     
+    
+@mcp.tool()
+async def identify_all_music(
+    url: str,
+    offset_seconds: int = 0,
+    max_segments: int = 5,
+) -> dict:
+    """Recognize multiple songs with approximate timestamps."""
+    import tempfile
+    import subprocess
+    import wave
+    from pathlib import Path
+    import imageio_ffmpeg
+
+    try:
+        clean_url = _validate_url(url)
+    except (ValueError, TypeError) as exc:
+        return {"status": "invalid_url", "error": str(exc)}
+
+    offset_seconds = max(0, int(offset_seconds))
+    max_segments = max(1, min(int(max_segments), 6))
+
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            audio_path = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _download_for_shazam, clean_url, folder
+                ),
+                timeout=65,
+            )
+
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            wav_path = str(Path(folder) / "full_audio.wav")
+
+            def convert():
+                subprocess.run(
+                    [
+                        ffmpeg, "-y", "-v", "error",
+                        "-i", audio_path,
+                        "-vn", "-ac", "1",
+                        "-ar", "16000",
+                        "-c:a", "pcm_s16le",
+                        wav_path,
+                    ],
+                    capture_output=True,
+                    check=True,
+                    timeout=45,
+                )
+
+            await asyncio.to_thread(convert)
+
+            with wave.open(wav_path, "rb") as wav:
+                duration = wav.getnframes() / wav.getframerate()
+
+            if duration < 6:
+                return {
+                    "status": "too_short",
+                    "duration_seconds": round(duration, 2),
+                }
+
+            if duration > 600:
+                return {
+                    "status": "too_long",
+                    "duration_seconds": round(duration, 2),
+                    "message": "Audio exceeds 10 minutes",
+                }
+
+            starts = []
+            position = float(offset_seconds)
+
+            while (
+                position <= duration - 6
+                and len(starts) < max_segments
+            ):
+                starts.append(position)
+                position += 10
+
+            if not starts:
+                return {
+                    "status": "complete",
+                    "songs": [],
+                    "has_more": False,
+                    "duration_seconds": round(duration, 2),
+                }
+
+            songs = {}
+            errors = []
+
+            async with Shazam() as shazam:
+                for index, start in enumerate(starts):
+                    clip_path = str(
+                        Path(folder) / f"clip_{index}.wav"
+                    )
+                    clip_length = min(12, duration - start)
+
+                    def make_clip():
+                        subprocess.run(
+                            [
+                                ffmpeg, "-y", "-v", "error",
+                                "-ss", str(start),
+                                "-i", wav_path,
+                                "-t", str(clip_length),
+                                "-ac", "1",
+                                "-ar", "16000",
+                                "-c:a", "pcm_s16le",
+                                clip_path,
+                            ],
+                            capture_output=True,
+                            check=True,
+                            timeout=20,
+                        )
+
+                    try:
+                        await asyncio.to_thread(make_clip)
+
+                        result = await asyncio.wait_for(
+                            shazam.recognize(clip_path),
+                            timeout=20,
+                        )
+
+                        track = (
+                            result.get("track")
+                            if isinstance(result, dict)
+                            else None
+                        )
+
+                        if track:
+                            key = str(
+                                track.get("key")
+                                or (
+                                    str(track.get("title"))
+                                    + "|"
+                                    + str(track.get("subtitle"))
+                                )
+                            )
+
+                            if key not in songs:
+                                songs[key] = {
+                                    "title": track.get("title"),
+                                    "artist": track.get("subtitle"),
+                                    "shazam_url": track.get("url"),
+                                    "track_id": track.get("key"),
+                                    "detected_at_seconds": round(
+                                        start, 2
+                                    ),
+                                    "timestamps_seconds": [],
+                                }
+
+                            songs[key]["timestamps_seconds"].append(
+                                round(start, 2)
+                            )
+
+                    except Exception as exc:
+                        errors.append({
+                            "segment_start": round(start, 2),
+                            "error_type": type(exc).__name__,
+                            "details": str(exc)[:200],
+                        })
+                    finally:
+                        Path(clip_path).unlink(missing_ok=True)
+
+            has_more = position <= duration - 6
+
+            return {
+                "status": (
+                    "ok" if songs else
+                    "partial_error" if errors else
+                    "not_recognized"
+                ),
+                "duration_seconds": round(duration, 2),
+                "segments_analyzed": len(starts),
+                "songs_found": len(songs),
+                "songs": list(songs.values()),
+                "segment_errors": errors,
+                "has_more": has_more,
+                "next_offset_seconds": (
+                    int(position) if has_more else None
+                ),
+                "note": (
+                    "Timestamps are sample positions, "
+                    "not exact song boundaries."
+                ),
+            }
+
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "details": str(exc)[:500],
         }
+
 
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
