@@ -304,10 +304,39 @@ async def identify_music(url: str) -> dict:
                 timeout=65,
             )
 
+            
+            import subprocess
+            from pathlib import Path
+            import imageio_ffmpeg
+
+            wav_path = str(Path(folder) / "recognition.wav")
+
+            def convert_audio():
+                subprocess.run(
+                    [
+                        imageio_ffmpeg.get_ffmpeg_exe(),
+                        "-y",
+                        "-v", "error",
+                        "-i", audio_path,
+                        "-vn",
+                        "-ac", "1",
+                        "-ar", "16000",
+                        "-c:a", "pcm_s16le",
+                        wav_path,
+                    ],
+                    check=True,
+                    timeout=35,
+                    capture_output=True,
+                )
+
+            await asyncio.to_thread(convert_audio)
+
             async with Shazam() as shazam:
                 result = await asyncio.wait_for(
-                    shazam.recognize(audio_path),
+                    shazam.recognize(wav_path),
                     timeout=35,
+                )
+
                 )
 
         track = result.get("track") if isinstance(result, dict) else None
