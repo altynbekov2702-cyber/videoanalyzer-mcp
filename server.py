@@ -138,5 +138,96 @@ async def video_probe(url: str) -> dict:
             "error": "Could not inspect video streams",
         }
 
+import tempfile
+from pathlib import Path
+from time import monotonic
+
+
+def _download_audio_check(url: str) -> dict:
+    max_bytes = 25 * 1024 * 1024
+    deadline = monotonic() + 55
+
+    def check_progress(data: dict) -> None:
+        if monotonic() > deadline:
+            raise RuntimeError("Audio download timed out")
+
+        if data.get("status") == "downloading":
+            received = data.get("downloaded_bytes") or 0
+            total = (
+                data.get("total_bytes")
+                or data.get("total_bytes_estimate")
+                or 0
+            )
+            if max(received, total) > max_bytes:
+                raise RuntimeError("Audio exceeds 25 MB")
+
+    with tempfile.TemporaryDirectory() as folder:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "bestaudio[ext=m4a]/bestaudio/best[acodec!=none]",
+            "outtmpl": str(Path(folder) / "audio.%(ext)s"),
+            "socket_timeout": 12,
+            "retries": 1,
+            "fragment_retries": 1,
+            "extractor_retries": 1,
+            "max_filesize": max_bytes,
+            "progress_hooks": [check_progress],
+        }
+
+        with YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+
+        if not isinstance(info, dict):
+            raise RuntimeError("No audio information")
+
+        files = [
+            p for p in Path(folder).iterdir()
+            if p.is_file()
+        ]
+
+        if len(files) != 1:
+            raise RuntimeError("Audio not downloaded")
+
+        audio_file = files[0]
+        size = audio_file.stat().st_size
+
+        if size <= 0 or size > max_bytes:
+            raise RuntimeError("Invalid audio size")
+
+        return {
+            "status": "ok",
+            "video_id": info.get("id"),
+            "audio_downloaded": True,
+            "audio_format": audio_file.suffix.lstrip("."),
+            "audio_size_bytes": size,
+            "duration_seconds": info.get("duration"),
+            "note": "Audio verified and temporary file deleted.",
+        }
+
+
+@mcp.tool()
+async def audio_extract(url: str) -> dict:
+    """Test audio downloading for Instagram or TikTok."""
+    try:
+        clean_url = _validate_url(url)
+    except (ValueError, TypeError) as exc:
+        return {
+            "status": "invalid_url",
+            "error": str(exc),
+        }
+
+    try:
+        return await asyncio.to_thread(
+            _download_audio_check, clean_url
+        )
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "error_type": type(exc).__name__,
+            "error": "Audio download failed or exceeded limits",
+        }
+
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
