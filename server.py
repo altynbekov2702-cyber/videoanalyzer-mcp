@@ -358,7 +358,9 @@ async def identify_music(url: str) -> dict:
         return {
             "status": "error",
             "error_type": type(exc).__name__,
-            "message": "Download or recognition failed",
+            "error_details": str(exc)[:1000],
+            "message": "Audio processing or recognition failed",
+    
         }
 
 if __name__ == "__main__":
