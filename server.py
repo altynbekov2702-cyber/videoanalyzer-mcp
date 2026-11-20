@@ -85,5 +85,58 @@ async def video_info(url: str) -> dict:
         return {"status": "error", "error": "Could not retrieve video metadata"}
 
 
+def _probe_video(url: str) -> dict:
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "socket_timeout": 15,
+    }
+
+    with YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not isinstance(info, dict):
+        return {"status": "unavailable"}
+
+    formats = info.get("formats") or []
+
+    has_video = any(
+        f.get("vcodec") not in (None, "none")
+        for f in formats
+    )
+
+    has_audio = any(
+        f.get("acodec") not in (None, "none")
+        for f in formats
+    )
+
+    return {
+        "status": "ok",
+        "video_id": info.get("id"),
+        "duration": info.get("duration"),
+        "video_stream_found": has_video,
+        "audio_stream_found": has_audio,
+        "format_count": len(formats),
+        "note": "Streams detected, not downloaded or verified.",
+    }
+
+
+@mcp.tool()
+async def video_probe(url: str) -> dict:
+    """Check available video and audio streams."""
+    try:
+        clean_url = _validate_url(url)
+        return await asyncio.wait_for(
+            asyncio.to_thread(_probe_video, clean_url),
+            timeout=45,
+        )
+    except Exception:
+        return {
+            "status": "unavailable",
+            "error": "Could not inspect video streams",
+        }
+
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
