@@ -337,8 +337,6 @@ async def identify_music(url: str) -> dict:
                     timeout=35,
                 )
 
-                )
-
         track = result.get("track") if isinstance(result, dict) else None
 
         if not track:
