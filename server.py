@@ -366,7 +366,7 @@ async def identify_music(url: str) -> dict:
 async def identify_all_music(
     url: str,
     offset_seconds: int = 0,
-    max_segments: int = 5,
+    max_segments: int = 2,
 ) -> dict:
     """Recognize multiple songs with approximate timestamps."""
     import tempfile
@@ -381,7 +381,7 @@ async def identify_all_music(
         return {"status": "invalid_url", "error": str(exc)}
 
     offset_seconds = max(0, int(offset_seconds))
-    max_segments = max(1, min(int(max_segments), 6))
+    max_segments = max(1, min(int(max_segments), 2))
 
     try:
         with tempfile.TemporaryDirectory() as folder:
@@ -476,9 +476,19 @@ async def identify_all_music(
                     try:
                         await asyncio.to_thread(make_clip)
 
-                        result = await asyncio.wait_for(
-                            shazam.recognize(clip_path),
-                            timeout=20,
+                          result = None
+
+                        for attempt in range(2):
+                            try:
+                                result = await asyncio.wait_for(
+                                    shazam.recognize(clip_path),
+                                    timeout=15,
+                                )
+                                break
+                            except asyncio.TimeoutError:
+                                if attempt == 1:
+                                    raise
+                                await asyncio.sleep(1)
                         )
 
                         track = (
@@ -523,18 +533,22 @@ async def identify_all_music(
                         Path(clip_path).unlink(missing_ok=True)
 
             has_more = position <= duration - 6
+                        failed_offsets = [
+                int(e["segment_start"]) for e in errors
+            ]
 
             return {
                 "status": (
-                    "ok" if songs else
-                    "partial_error" if errors else
-                    "not_recognized"
-                ),
+    "partial_error" if errors else
+    "ok" if songs else
+    "not_recognized"
+),
                 "duration_seconds": round(duration, 2),
                 "segments_analyzed": len(starts),
                 "songs_found": len(songs),
                 "songs": list(songs.values()),
                 "segment_errors": errors,
+                "failed_offsets_seconds": failed_offsets,
                 "has_more": has_more,
                 "next_offset_seconds": (
                     int(position) if has_more else None
