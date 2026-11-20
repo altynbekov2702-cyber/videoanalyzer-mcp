@@ -476,20 +476,19 @@ async def identify_all_music(
                     try:
                         await asyncio.to_thread(make_clip)
 
-                          result = None
+                result = None
 
-                        for attempt in range(2):
-                            try:
-                                result = await asyncio.wait_for(
-                                    shazam.recognize(clip_path),
-                                    timeout=15,
-                                )
-                                break
-                            except asyncio.TimeoutError:
-                                if attempt == 1:
-                                    raise
-                                await asyncio.sleep(1)
+                for attempt in range(2):
+                    try:
+                        result = await asyncio.wait_for(
+                            shazam.recognize(clip_path),
+                            timeout=15,
                         )
+                        break
+                    except asyncio.TimeoutError:
+                        if attempt == 1:
+                            raise
+                        await asyncio.sleep(1)
 
                         track = (
                             result.get("track")
